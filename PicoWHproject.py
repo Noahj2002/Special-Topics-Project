@@ -34,11 +34,13 @@ flash_led(1)
 nrf = setup()
 nrf.start_listening()
 msg_string = ""
-idCheck = b"?\xcc\xb8\x99\rFvl\x00:\x18\xe7\xd6\xa6\xeeN"
+idCheck = b"?\xcc\xb8\x99\rFvl\x00:\x18\xe7\xd6\xa6\xeeN" # DO NOT TOUCH - NJ
 current_user_creds = b""
 
 # Setup DIP Switch (for 4-hex digit user PIN input)
-dip_switch_pins = [Pin(i, Pin.IN) for i in (2, 3, 4, 5)]  # Example GPIO pins for DIP switch
+dip_switch_pins = [Pin(i, Pin.IN) for i in (19, 20, 21, 22)] # Updated - NJ
+
+button1 = Pin(9, Pin.IN, pull=Pin.PULL_DOWN) # Green Button NJ
 
 # Setup NRF24L01 for communication
 csn_pin = Pin(15, mode=Pin.OUT, value=1)
@@ -47,10 +49,10 @@ spi_nrf = SPI(1, baudrate=1000000, polarity=0, phase=0, sck=Pin(10), mosi=Pin(11
 nrf = NRF24L01(spi_nrf, csn_pin, ce_pin, payload_size=32)
 
 # Encrypt data with CBC mode
-def xor_bytes(block1, block2):
+def xor_bytes(block1, block2): #NJ
     return bytes(b1 ^ b2 for b1, b2 in zip(block1, block2))
 
-class AES:
+class AES: #NJ
     def __init__(self, key):
         if len(key) != 16:  # 16 bytes = 128 bits for AES
             raise ValueError("Key must be 16 bytes long.")
@@ -74,7 +76,7 @@ class AES:
 
         return b''.join(blocks)
 
-# Encrypt data with AES in ECB mode
+# Encrypt data with AES in ECB mode - NJ
 def encrypt_data(data):
     if isinstance(data, str):
         data = data.encode()  # Convert string to bytes
@@ -84,13 +86,11 @@ def encrypt_data(data):
     if padding_length == 0:
         padding_length = BLOCK_SIZE  # Always add padding
     
-    # Pad with PKCS7 style (padding byte represents the length of the padding)
     padded_data = data + (bytes([padding_length]) * padding_length)
-    print("PADDING LEN:", padding_length)
-    print("PADDED DATA:", padded_data)
-    print("PADDED DATA LENGTH:", len(padded_data))  # Should be a multiple of BLOCK_SIZE
-    
-    # Initialize AES encryption with key
+    # print("PADDING LEN:", padding_length)
+    # print("PADDED DATA:", padded_data)
+    # print("PADDED DATA LENGTH:", len(padded_data))  # Should be a multiple of BLOCK_SIZE
+
     aes = AES(key)
     return aes.encrypt(padded_data)
 
@@ -117,12 +117,16 @@ def send(nrf, msg):
     nrf.send("\n")
     nrf.start_listening()
 
-# Function to read DIP switch as 4-hex digit PIN
+# Function to read DIP switch as 4-hex digit PIN - UPDATED NJ
 def read_dip_switch():
     pin_value = 0
-    for i, pin in enumerate(dip_switch_pins):
-        pin_value |= (pin.value() << i)
-    return hex(pin_value)
+    p1 = Pin(19).value()
+    p2 = Pin(20).value()
+    p3 = Pin(21).value()
+    p4 = Pin(22).value()
+    
+    pin_value = str(p4) + str(p3) + str(p2) + str(p1)
+    return pin_value
 
 # Function to generate random challenge
 def generate_random_challenge():
@@ -135,8 +139,7 @@ def send_encrypted_challenge():
     nrf.send(encrypted_challenge)
 
 # Convert binary string to hexadecimal
-def binary_to_hex(binary_str):
-    # Convert binary string to an integer, then to hexadecimal
+def binary_to_hex(binary_str): #NJ
     try:
         hex_str = hex(int(binary_str, 2))[2:].upper()  # Convert to hex, remove "0x" prefix, and make uppercase
         return hex_str
@@ -145,6 +148,10 @@ def binary_to_hex(binary_str):
         return None
 
 # RFID Authentication Process
+pinholder = []
+# Read RFID Data
+pinholder = []
+# Read RFID Data
 def read_rfid_data():
     # Check for card presence
     (status, tag_type) = rfid_reader.request(rfid_reader.REQIDL)
@@ -155,24 +162,36 @@ def read_rfid_data():
         (status, uid) = rfid_reader.SelectTagSN()
         if status == rfid_reader.OK:
             # Convert the UID to a string (hexadecimal format)
-            uid_str = ''.join([f'{byte:02X}' for byte in uid]) 
-            print("Card UID:", uid_str)
-            
+            uid_str = ''.join([f'{byte:02X}' for byte in uid])  # Format each byte as a 2-digit uppercase hex string
+#             print("Card UID:", uid_str)
+            i=0
+            while i<4 :
+                if button1.value() == 1:
+                    i+=1
+                    pinholder.append(read_dip_switch())
+                    print("PIN HOLDER: ", pinholder)
+                    time.sleep(0.5) 
+                    
+            combined_string = ''.join(pinholder) #F683
+            pin_hex = binary_to_hex(combined_string)  # Convert binary string to hex
+
             # Example PIN in binary
-            pin = 1111011010000011  # 
-            pin_str = str(pin)  # Convert the number to a string
-            pin_hex = binary_to_hex(pin_str)  # Convert binary string to hex
-            print(f"PIN in Hex: {pin_hex}")
+#             pin = 1111011010000011 
+#             pin_str = str(pin)  # Convert the number to a string
+#             pin_hex = binary_to_hex(pin_str)
             
-            # Combine UID and PIN (hex)
+#             print(f"PIN in Hex: {pin_hex}")
+
             current_user_creds = (uid_str + pin_hex).encode()  # Convert to bytes
             enc_ID = encrypt_data(current_user_creds)
+            
+#             print("CURRENT USER: ", current_user_creds)
+#             print("ENC USER: ", enc_ID)
 
             if enc_ID == idCheck:
-                
                 # Stop authentication after reading
                 rfid_reader.stop_crypto1()
-                return enc_ID
+                return 1
             else:
                 print("Authentication failed")
                 return -1
@@ -180,8 +199,10 @@ def read_rfid_data():
             print("Failed to select the card")
             return 0
     else:
-        print("No card detected")
+#         print("No card detected")
         return 0
+
+
 
 
 # Setup RFID reader (RC522)
